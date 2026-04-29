@@ -29,6 +29,45 @@ export const fmtDate = (iso: string | null | undefined): string => {
   })
 }
 
+// One-char status icon (HTML span ready for plotly tick labels).
+// Combines GH `conclusion` (when present) with `status` for in-flight jobs.
+export const statusIcon = (
+  conclusion: string | null | undefined,
+  status: string | null | undefined,
+): { icon: string; color: string; label: string } => {
+  if (conclusion === 'success') return { icon: '✓', color: '#10b981', label: 'success' }
+  if (conclusion === 'failure') return { icon: '✗', color: '#ef4444', label: 'failure' }
+  if (conclusion === 'cancelled') return { icon: '⊘', color: '#9ca3af', label: 'cancelled' }
+  if (conclusion === 'skipped') return { icon: '–', color: '#6b7280', label: 'skipped' }
+  if (conclusion === 'timed_out') return { icon: '⏱', color: '#ef4444', label: 'timed out' }
+  if (conclusion === 'neutral') return { icon: '●', color: '#9ca3af', label: 'neutral' }
+  if (status === 'in_progress') return { icon: '◐', color: '#60a5fa', label: 'running' }
+  if (status === 'queued' || status === 'waiting' || status === 'pending')
+    return { icon: '◌', color: '#a78bfa', label: status }
+  return { icon: '?', color: '#9ca3af', label: status || '—' }
+}
+
+// Aggregate status of a group of jobs (matrix). Worst-of wins:
+// failure > timed_out > cancelled > running > queued > skipped > success.
+const STATUS_RANK: Record<string, number> = {
+  failure: 7, timed_out: 7, cancelled: 6, running: 5, queued: 4, neutral: 3, skipped: 2, success: 1,
+}
+export const aggregateStatus = (
+  jobs: { conclusion: string | null; status: string }[],
+): { icon: string; color: string; label: string } => {
+  let worst: ReturnType<typeof statusIcon> | null = null
+  let worstRank = -1
+  for (const j of jobs) {
+    const s = statusIcon(j.conclusion, j.status)
+    const rank = STATUS_RANK[s.label] ?? 0
+    if (rank > worstRank) {
+      worstRank = rank
+      worst = s
+    }
+  }
+  return worst ?? { icon: '?', color: '#9ca3af', label: '—' }
+}
+
 export const stepColor = (name: string, conclusion: string | null): string => {
   const n = (name || '').toLowerCase()
   if (conclusion === 'failure') return '#ef4444'

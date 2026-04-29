@@ -6,6 +6,47 @@ const parse = (s: string | null): number | null => {
   return new Date(s).getTime()
 }
 
+// Window (seconds) for inferring predecessors from timing: a job whose
+// completed_at lands in [created - WINDOW, created + GRACE] of a downstream job
+// is treated as a `needs:` candidate.
+const PRED_WINDOW_S = 90
+const PRED_GRACE_S = 5
+
+// Pull the "[i/N]" suffix off a job name, if any. Used to detect matrix shards.
+// Match GH's "Run E2E Tests [6/12]" or "tests / shard [3/8]".
+const MATRIX_RE = /\s*\[(\d+)\/(\d+)\]\s*$/
+export const splitMatrix = (name: string): { groupKey: string; matrixIndex: string | null } => {
+  const m = name.match(MATRIX_RE)
+  if (!m) return { groupKey: name, matrixIndex: null }
+  return { groupKey: name.replace(MATRIX_RE, '').trim(), matrixIndex: `${m[1]}/${m[2]}` }
+}
+
+// Infer predecessor ids per job using rel_created vs rel_completed timing.
+// Sibling-fanout guard: jobs created at the same wave (within 2s) are not
+// upstream of each other.
+function inferPredecessorMap(rows: JobRow[]): Map<number, number[]> {
+  const out = new Map<number, number[]>()
+  for (const j of rows) {
+    const created = j.rel_created
+    if (created == null) {
+      out.set(j.id, [])
+      continue
+    }
+    const preds: number[] = []
+    for (const k of rows) {
+      if (k.id === j.id) continue
+      const end = k.rel_completed
+      if (end == null) continue
+      if (Math.abs((k.rel_created ?? 0) - created) <= 2) continue
+      if (end <= created + PRED_GRACE_S && end >= created - PRED_WINDOW_S) {
+        preds.push(k.id)
+      }
+    }
+    out.set(j.id, preds)
+  }
+  return out
+}
+
 export function buildPayload(
   ownerRepo: string,
   runId: string,
@@ -80,6 +121,7 @@ export function buildPayload(
         }
       })
       .filter((x): x is NonNullable<typeof x> => x != null)
+    const { groupKey, matrixIndex } = splitMatrix(j.name)
     return {
       id: j.id,
       name: j.name,
@@ -95,8 +137,15 @@ export function buildPayload(
       html_url: j.html_url,
       critical: critIds.has(j.id),
       steps,
+      predecessors: [],
+      group_key: groupKey,
+      matrix_index: matrixIndex,
     }
   })
+
+  // Annotate predecessors after rows are built so we can reference ids freely.
+  const predMap = inferPredecessorMap(rows)
+  for (const r of rows) r.predecessors = predMap.get(r.id) ?? []
 
   rows.sort((a, b) => {
     const aS = a.rel_started ?? a.rel_created ?? 0
@@ -116,16 +165,8 @@ export function buildPayload(
 }
 
 // No-queue transform: shift each job's start to "max(no-queue end of inferred upstream)",
-// not just to its created_at. The GH API doesn't expose `needs:` edges, so we infer:
-//
-//   upstream(X) = jobs whose actual completed_at is in [X.created_at - WINDOW, X.created_at + GRACE].
-//   X.noq_start = max(noq_end of inferred upstream); 0 if none (root job).
-//   X.noq_end   = X.noq_start + X.exec
-//
-// Plus rel_created bucketing so matrix/fanout siblings land on the same predecessor wave.
-const UPSTREAM_WINDOW_S = 90 // candidate predecessor finished within this many seconds before X.created
-const UPSTREAM_GRACE_S = 5   // tolerance: predecessor may complete a few seconds after X.created (clock skew / GH eventing lag)
-
+// not just to its created_at. Reuses the predecessor map already attached to
+// each JobRow during buildPayload (timing-inferred approximation of `needs:`).
 export function applyNoQueue(run: RunPayload): RunPayload {
   if (run.empty) return run
   const cloned: RunPayload = JSON.parse(JSON.stringify(run))
@@ -136,24 +177,12 @@ export function applyNoQueue(run: RunPayload): RunPayload {
   const noqStart = new Map<number, number>()
 
   for (const j of order) {
-    const created = j.rel_created ?? 0
     const exec = j.exec_s ?? 0
-
-    // Find candidate upstreams: jobs that already have a noq_end and finished close to this job's create time.
     const candidates: number[] = []
-    for (const k of cloned.jobs) {
-      if (k.id === j.id) continue
-      const end = noqEnd.get(k.id)
-      if (end == null) continue
-      const actualEnd = k.rel_completed
-      if (actualEnd == null) continue
-      // Sibling-fanout guard: if k was created at the same wave as j (within 2s), it's not an upstream.
-      if (Math.abs((k.rel_created ?? 0) - created) <= 2) continue
-      if (actualEnd <= created + UPSTREAM_GRACE_S && actualEnd >= created - UPSTREAM_WINDOW_S) {
-        candidates.push(end)
-      }
+    for (const predId of j.predecessors) {
+      const end = noqEnd.get(predId)
+      if (end != null) candidates.push(end)
     }
-    // Roots: no inferred upstream → start at 0.
     const start = candidates.length ? Math.max(...candidates) : 0
     noqStart.set(j.id, start)
     noqEnd.set(j.id, start + exec)

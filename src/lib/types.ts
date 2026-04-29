@@ -66,6 +66,12 @@ export interface JobRow {
   html_url: string
   critical: boolean
   steps: RowStep[]
+  // Inferred from timing: ids of jobs whose `completed_at` falls in the window
+  // just before this job's `created_at`. Approximation of `needs:`.
+  predecessors: number[]
+  // Matrix grouping: e.g. "Run E2E Tests [6/12]" → group "Run E2E Tests".
+  group_key: string
+  matrix_index: string | null // "6/12" if matrix; null otherwise
 }
 
 export interface RunPayload {

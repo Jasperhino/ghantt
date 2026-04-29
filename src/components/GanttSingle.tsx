@@ -10,9 +10,6 @@ import {
 import type { JobRow, RunPayload } from '@/lib/types'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
-import { Button } from '@/components/ui/button'
 
 const concBadgeVariant = (c: string | null | undefined): 'default' | 'secondary' | 'destructive' | 'outline' => {
   if (c === 'success') return 'default'
@@ -53,7 +50,6 @@ export function GanttSingle({ run }: { run: RunPayload }) {
 
   // Default: every detected matrix group is collapsed. Toggle stores expanded ones.
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [showNeeds, setShowNeeds] = useState(false)
 
   const toggleGroup = (key: string) => {
     setExpanded((prev) => {
@@ -63,8 +59,10 @@ export function GanttSingle({ run }: { run: RunPayload }) {
       return next
     })
   }
-  const expandAll = () => setExpanded(new Set(groups.map((g) => g.groupKey)))
-  const collapseAll = () => setExpanded(new Set())
+  const onChartClick = (customdata: string | null) => {
+    if (!customdata || !customdata.startsWith('g:')) return
+    toggleGroup(customdata.slice(2))
+  }
 
   const { traces, layout, runnerLegend } = useMemo(() => {
     if (run.empty) {
@@ -97,11 +95,6 @@ export function GanttSingle({ run }: { run: RunPayload }) {
       }
     }
 
-    // Map each underlying job id to the row that visually represents it.
-    // (Used to anchor `needs:` arrows even when a predecessor is hidden inside
-    // a collapsed group.)
-    const rowKey = (r: DisplayRow): string =>
-      r.kind === 'group' ? `g:${r.groupKey}` : `j:${r.job.id}`
     const yLabelFor = (r: DisplayRow): string => {
       if (r.kind === 'group') {
         const status = aggregateStatus(r.members)
@@ -125,13 +118,6 @@ export function GanttSingle({ run }: { run: RunPayload }) {
     }
 
     const yLabels = rows.map((r) => yLabelFor(r))
-    const rowKeyByJobId = new Map<number, string>()
-    rows.forEach((r) => {
-      if (r.kind === 'job') rowKeyByJobId.set(r.job.id, rowKey(r))
-      else for (const m of r.members) rowKeyByJobId.set(m.id, rowKey(r))
-    })
-    const yByRowKey = new Map<string, string>()
-    rows.forEach((r, i) => yByRowKey.set(rowKey(r), yLabels[i]))
 
     const traces: Data[] = []
     const shapes: Partial<Shape>[] = []
@@ -150,6 +136,7 @@ export function GanttSingle({ run }: { run: RunPayload }) {
         const okN = r.members.filter((m) => m.conclusion === 'success').length
         const failN = r.members.filter((m) => m.conclusion === 'failure').length
         const runN = r.members.filter((m) => m.status === 'in_progress').length
+        const cd = `g:${r.groupKey}`
         if (started > created) {
           traces.push({
             x: [started - created],
@@ -157,6 +144,7 @@ export function GanttSingle({ run }: { run: RunPayload }) {
             y: [y],
             orientation: 'h', type: 'bar',
             marker: { color: '#6b7280', opacity: 0.4, line: { width: 0 } },
+            customdata: [cd],
             hovertemplate: `<b>${r.groupKey}</b> ×${r.members.length}<br>queue (group): ${fmt(started - created)}<extra></extra>`,
             showlegend: false,
           } as Data)
@@ -172,13 +160,18 @@ export function GanttSingle({ run }: { run: RunPayload }) {
           y: [y],
           orientation: 'h', type: 'bar',
           marker: { color: aggColor, opacity: 0.85, line: { width: 0 } },
-          hovertemplate: `<b>${r.groupKey}</b> ×${r.members.length}<br>${okN} ok · ${failN} fail · ${runN} running<br>span: ${fmt(completed - started)}<br>runner: ${tag}${vm ? ` (${vm})` : ''}<br><i>click pill above to expand</i><extra></extra>`,
+          customdata: [cd],
+          hovertemplate: `<b>${r.groupKey}</b> ×${r.members.length}<br>${okN} ok · ${failN} fail · ${runN} running<br>span: ${fmt(completed - started)}<br>runner: ${tag}${vm ? ` (${vm})` : ''}<br><i>click to expand</i><extra></extra>`,
           showlegend: false,
         } as Data)
         return
       }
 
       const j = r.job
+      // If this job is a member of a (now-expanded) matrix group, tag the row
+      // with that group's customdata so a click on a member row collapses it
+      // back. Non-matrix rows get no customdata (clicks are no-ops).
+      const memberCd = j.matrix_index && groupedKeys.has(j.group_key) ? `g:${j.group_key}` : undefined
       if (j.rel_created != null && j.rel_started != null && j.rel_started > j.rel_created) {
         traces.push({
           x: [j.rel_started - j.rel_created],
@@ -186,12 +179,9 @@ export function GanttSingle({ run }: { run: RunPayload }) {
           y: [y],
           orientation: 'h', type: 'bar',
           marker: { color: '#6b7280', opacity: 0.4, line: { width: 0 } },
+          ...(memberCd ? { customdata: [memberCd] } : {}),
           hovertemplate: `<b>${j.name}</b><br>queue: ${fmt(j.queue_s)}<br>runner: ${(j.runner_labels || []).join(', ') || j.runner_name || '—'}${
             runnerInstance(j.runner_labels, j.runner_name) ? `<br>instance: ${runnerInstance(j.runner_labels, j.runner_name)}` : ''
-          }${
-            j.predecessors.length
-              ? `<br>needs: ${j.predecessors.map((id) => run.jobs.find((x) => x.id === id)?.name || id).join(', ')}`
-              : ''
           }<extra></extra>`,
           showlegend: false,
         } as Data)
@@ -203,6 +193,7 @@ export function GanttSingle({ run }: { run: RunPayload }) {
           y: [y],
           orientation: 'h', type: 'bar',
           marker: { color: stepColor(s.name, s.conclusion), opacity: 0.92, line: { width: 0 } },
+          ...(memberCd ? { customdata: [memberCd] } : {}),
           hovertemplate: `<b>${j.name}</b><br>step ${s.number}: ${s.name}<br>${fmt(s.dur)} · t+${fmt(s.rel_start)} → t+${fmt(s.rel_end)}<extra></extra>`,
           showlegend: false,
         } as Data)
@@ -218,35 +209,6 @@ export function GanttSingle({ run }: { run: RunPayload }) {
         } as Partial<Shape>)
       }
     })
-
-    // Optional `needs:` arrows. Anchor at upstream's actual rel_completed and
-    // downstream's rel_started, mapped through the row-key lookup so collapsed
-    // groups still resolve.
-    if (showNeeds) {
-      for (const r of rows) {
-        if (r.kind !== 'job') continue
-        const j = r.job
-        if (j.rel_started == null) continue
-        const myKey = rowKey(r)
-        const myY = yByRowKey.get(myKey)
-        if (!myY) continue
-        for (const predId of j.predecessors) {
-          const predRowKey = rowKeyByJobId.get(predId)
-          if (!predRowKey || predRowKey === myKey) continue
-          const predY = yByRowKey.get(predRowKey)
-          if (!predY) continue
-          const pred = run.jobs.find((x) => x.id === predId)
-          if (!pred || pred.rel_completed == null) continue
-          shapes.push({
-            type: 'line',
-            x0: pred.rel_completed, x1: j.rel_started,
-            y0: predY, y1: myY,
-            xref: 'x', yref: 'y',
-            line: { color: 'rgba(167,139,250,0.55)', width: 1, dash: 'dot' },
-          } as Partial<Shape>)
-        }
-      }
-    }
 
     const tickStep =
       run.total_wall > 3600 ? 600 : run.total_wall > 1200 ? 120 : run.total_wall > 300 ? 60 : 30
@@ -289,7 +251,7 @@ export function GanttSingle({ run }: { run: RunPayload }) {
       .map(([tag, v]) => ({ tag, color: v.color, count: v.count, vm: v.vm }))
 
     return { traces, layout, runnerLegend }
-  }, [run, expanded, showNeeds, groups])
+  }, [run, expanded, groups])
 
   if (run.empty) {
     return (
@@ -344,31 +306,6 @@ export function GanttSingle({ run }: { run: RunPayload }) {
 
       <Legend />
 
-      {groups.length > 0 && (
-        <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
-          <span>matrix:</span>
-          {groups.map(({ groupKey, members }) => {
-            const isOpen = expanded.has(groupKey)
-            const status = aggregateStatus(members)
-            return (
-              <button
-                key={groupKey}
-                onClick={() => toggleGroup(groupKey)}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border hover:bg-muted/40 transition-colors"
-                title={`${members.length} shards`}
-              >
-                <span style={{ color: status.color }}>{status.icon}</span>
-                <span>{isOpen ? '▾' : '▸'}</span>
-                <code className="font-mono text-[11px]">{groupKey}</code>
-                <span className="text-muted-foreground">×{members.length}</span>
-              </button>
-            )
-          })}
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={expandAll}>expand all</Button>
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={collapseAll}>collapse all</Button>
-        </div>
-      )}
-
       <div className="text-xs text-muted-foreground flex flex-wrap gap-3 items-center">
         <span>runners:</span>
         {runnerLegend.map(({ tag, color, count, vm }) => (
@@ -379,15 +316,14 @@ export function GanttSingle({ run }: { run: RunPayload }) {
             <span>×{count}</span>
           </span>
         ))}
-        <span className="ml-auto inline-flex items-center gap-2">
-          <Switch id="needs" checked={showNeeds} onCheckedChange={setShowNeeds} />
-          <Label htmlFor="needs" className="text-xs cursor-pointer">
-            Show <code className="font-mono">needs:</code> (inferred)
-          </Label>
-        </span>
+        {groups.length > 0 && (
+          <span className="ml-auto text-muted-foreground/70">
+            click a <span className="text-foreground">▸</span> matrix row to expand its shards
+          </span>
+        )}
       </div>
 
-      <PlotlyChart data={traces} layout={layout} style={{ width: '100%' }} />
+      <PlotlyChart data={traces} layout={layout} onPointClick={onChartClick} style={{ width: '100%' }} />
     </div>
   )
 }

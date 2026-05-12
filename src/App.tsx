@@ -38,7 +38,7 @@ export default function App() {
   
   // Inputs
   const [runUrl, setRunUrl] = useState('')
-  const [branchOwnerRepo, setBranchOwnerRepo] = useState('Cula-Technologies/cula-platform')
+  const [branchOwnerRepo, setBranchOwnerRepo] = useState('')
   const [branchName, setBranchName] = useState('')
   const [branchLimit, setBranchLimit] = useState(8)
 

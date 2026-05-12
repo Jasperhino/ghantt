@@ -210,7 +210,7 @@ export default function App() {
         </CardContent>
       </Card>
 
-      {branchSummary.length > 0 && (
+      {branchSummary.length > 0 && runs.length === 0 && (
         <Card>
           <CardContent className="py-3">
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">

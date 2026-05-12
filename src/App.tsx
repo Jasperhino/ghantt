@@ -78,6 +78,7 @@ export default function App() {
       if (!parsed || !parsed.ownerRepo) throw new Error('Paste a full run URL (https://github.com/owner/repo/actions/runs/<id>[/attempts/<n>])')
       const loaded = await addRun(parsed.ownerRepo, parsed.runId, parsed.attempt)
       setSelA(loaded.key)
+      setBranchSummary([]) // Clear branch summary when loading a specific run
       if (mode === 'compare' && !selB) {
         const others = runs.filter((r) => r.key !== loaded.key)
         if (others[0]) setSelB(others[0].key)
@@ -210,7 +211,7 @@ export default function App() {
         </CardContent>
       </Card>
 
-      {branchSummary.length > 0 && runs.length === 0 && (
+      {branchSummary.length > 0 && (
         <Card>
           <CardContent className="py-3">
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">

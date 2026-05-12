@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchBranchRuns, fetchRunJobs, fetchRunMeta } from '@/lib/api'
 import { applyNoQueue, buildPayload } from '@/lib/transform'
+import { useAuth } from '@/lib/auth'
 import { fmt, fmtDate, parseRunUrl } from '@/lib/format'
 import type { RunPayload, RunSummary } from '@/lib/types'
 import { GanttSingle } from '@/components/GanttSingle'
@@ -33,6 +34,8 @@ const labelFor = (r: RunPayload) =>
   `#${r.run_id}${r.attempt ? `/a${r.attempt}` : ''} · ${r.head_sha || ''} · ${fmtDate(r.run_start)} · ${fmt(r.total_wall)} · ${r.conclusion || r.status || ''}`
 
 export default function App() {
+  const { authenticated, user, login } = useAuth()
+  
   // Inputs
   const [runUrl, setRunUrl] = useState('')
   const [branchOwnerRepo, setBranchOwnerRepo] = useState('Cula-Technologies/cula-platform')
@@ -119,11 +122,14 @@ export default function App() {
   // Auto-pick A and B in compare mode
   useEffect(() => {
     if (mode === 'compare') {
-      if (!selA && runs[0]) setSelA(runs[0].key)
-      if (!selB) {
-        const other = runs.find((r) => r.key !== selA)
-        if (other) setSelB(other.key)
-      }
+      // Use setTimeout to avoid synchronous setState
+      setTimeout(() => {
+        if (!selA && runs[0]) setSelA(runs[0].key)
+        if (!selB) {
+          const other = runs.find((r) => r.key !== selA)
+          if (other) setSelB(other.key)
+        }
+      }, 0)
     }
   }, [mode, runs, selA, selB])
 
@@ -139,11 +145,25 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-6 space-y-4 max-w-[1400px] mx-auto">
-      <header>
-        <h1 className="text-2xl font-semibold">gh-gantt</h1>
-        <p className="text-sm text-muted-foreground">
-          Per-step Gantt + queue analysis for GitHub Actions runs. Auth is your local <code className="font-mono">gh</code> CLI.
-        </p>
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">gh-gantt</h1>
+          <p className="text-sm text-muted-foreground">
+            Per-step Gantt + queue analysis for GitHub Actions runs.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {authenticated ? (
+            <>
+              <span className="text-sm text-muted-foreground">Signed in as {user?.login}</span>
+              {user?.avatar_url && (
+                <img src={user.avatar_url} alt={user.login} className="w-8 h-8 rounded-full" />
+              )}
+            </>
+          ) : (
+            <Button onClick={login} variant="outline">Sign in with GitHub</Button>
+          )}
+        </div>
       </header>
 
       <Card>

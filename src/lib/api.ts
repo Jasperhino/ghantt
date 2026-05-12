@@ -1,8 +1,14 @@
-// Frontend API client — calls our Bun proxy, which calls gh CLI.
+// Frontend API client — calls our Bun proxy, which uses Octokit.
 import type { GHJob, GHRunMeta, RunSummary } from './types'
+import { getAuthHeaders } from './auth'
+
+function getSessionId(): string | null {
+  return localStorage.getItem('gh-session')
+}
 
 async function get<T>(url: string): Promise<T> {
-  const r = await fetch(url)
+  const headers = getAuthHeaders(getSessionId())
+  const r = await fetch(url, { headers })
   if (!r.ok) {
     const body = await r.text().catch(() => '')
     throw new Error(`${r.status} ${r.statusText} — ${body.slice(0, 300)}`)
@@ -25,9 +31,8 @@ export async function fetchRunJobs(
   attempt: string,
 ): Promise<GHJob[]> {
   const q = attempt ? `?attempt=${attempt}` : ''
-  // backend returns slurped paginated array of {jobs: [...]} pages.
-  const pages = await get<{ jobs?: GHJob[] }[]>(`/api/runs/${ownerRepo}/${runId}/jobs${q}`)
-  return pages.flatMap((p) => p.jobs || [])
+  // backend returns array of jobs (handles pagination)
+  return get<GHJob[]>(`/api/runs/${ownerRepo}/${runId}/jobs${q}`)
 }
 
 export async function fetchBranchRuns(
